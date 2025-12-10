@@ -25,6 +25,8 @@ if ACTIVEMQ_URL_SECONDARY:
 
 app = Flask(__name__)
 
+# No global state needed - Prometheus registry handles everything
+
 # Prometheus metrics
 activemq_queue_size = Gauge('activemq_queue_size', 'Queue size (pending messages)', ['queue'])
 activemq_queue_enqueue_count = Counter('activemq_queue_enqueue_count', 'Total enqueued messages', ['queue'])
@@ -220,39 +222,33 @@ def update_metrics():
     print(f"[INFO] Metrics updated in {duration:.2f}s")
 
 def background_scraper():
-    print(f"[INFO] Starting background scraper (interval: {SCRAPE_INTERVAL}s)")
+    print(f"[INFO] Starting background scraper (interval: {SCRAPE_INTERVAL}s)", flush=True)
+    # Run initial scrape immediately
+    update_metrics()
+    # Then continue with periodic scraping
     while True:
-        update_metrics()
         time.sleep(SCRAPE_INTERVAL)
+        update_metrics()
+
+# Start background thread when module is loaded (works with Gunicorn)
+scraper_thread = threading.Thread(target=background_scraper, daemon=True)
+scraper_thread.start()
 
 @app.route('/')
 def index():
-    return '''
-    <html>
-    <head><title>ActiveMQ Metrics Exporter</title></head>
-    <body>
-        <h1>ActiveMQ Metrics Exporter</h1>
-        <p>Prometheus metrics available at <a href="/metrics">/metrics</a></p>
-    </body>
-    </html>
-    '''
+    return 'ActiveMQ Metrics Exporter - visit /metrics for Prometheus metrics'
 
 @app.route('/metrics')
 def metrics():
     return Response(generate_latest(REGISTRY), mimetype='text/plain')
+
 
 @app.route('/health')
 def health():
     return {'status': 'ok'}, 200
 
 if __name__ == '__main__':
-    # Start background scraper thread
-    scraper_thread = threading.Thread(target=background_scraper, daemon=True)
-    scraper_thread.start()
-
-    # Run initial scrape
-    update_metrics()
-
+    # Background scraper already started at module load (line 235)
     # Start Flask server
     port = int(os.getenv('PORT', 8000))
     app.run(host='0.0.0.0', port=port)
