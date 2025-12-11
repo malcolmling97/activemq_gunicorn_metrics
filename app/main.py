@@ -28,16 +28,16 @@ app = Flask(__name__)
 # No global state needed - Prometheus registry handles everything
 
 # Prometheus metrics
-activemq_queue_size = Gauge('activemq_queue_size', 'Queue size (pending messages)', ['queue'])
-activemq_queue_enqueue_count = Counter('activemq_queue_enqueue_count', 'Total enqueued messages', ['queue'])
-activemq_queue_dequeue_count = Counter('activemq_queue_dequeue_count', 'Total dequeued messages', ['queue'])
-activemq_queue_consumer_count = Gauge('activemq_queue_consumer_count', 'Active consumers', ['queue'])
-activemq_queue_producer_count = Gauge('activemq_queue_producer_count', 'Active producers', ['queue'])
+activemq_queue_size = Gauge('activemq_queue_size', 'Queue size (pending messages)', ['queue', 'broker'])
+activemq_queue_enqueue_count = Counter('activemq_queue_enqueue_count', 'Total enqueued messages', ['queue', 'broker'])
+activemq_queue_dequeue_count = Counter('activemq_queue_dequeue_count', 'Total dequeued messages', ['queue', 'broker'])
+activemq_queue_consumer_count = Gauge('activemq_queue_consumer_count', 'Active consumers', ['queue', 'broker'])
+activemq_queue_producer_count = Gauge('activemq_queue_producer_count', 'Active producers', ['queue', 'broker'])
 
-activemq_topic_enqueue_count = Counter('activemq_topic_enqueue_count', 'Total enqueued messages', ['topic'])
-activemq_topic_dequeue_count = Counter('activemq_topic_dequeue_count', 'Total dequeued messages', ['topic'])
-activemq_topic_consumer_count = Gauge('activemq_topic_consumer_count', 'Active consumers', ['topic'])
-activemq_topic_producer_count = Gauge('activemq_topic_producer_count', 'Active producers', ['topic'])
+activemq_topic_enqueue_count = Counter('activemq_topic_enqueue_count', 'Total enqueued messages', ['topic', 'broker'])
+activemq_topic_dequeue_count = Counter('activemq_topic_dequeue_count', 'Total dequeued messages', ['topic', 'broker'])
+activemq_topic_consumer_count = Gauge('activemq_topic_consumer_count', 'Active consumers', ['topic', 'broker'])
+activemq_topic_producer_count = Gauge('activemq_topic_producer_count', 'Active producers', ['topic', 'broker'])
 
 activemq_scrape_success = Gauge('activemq_scrape_success', 'Whether the last scrape was successful')
 activemq_scrape_duration = Gauge('activemq_scrape_duration_seconds', 'Duration of the last scrape')
@@ -46,6 +46,7 @@ class StatisticsListener(stomp.ConnectionListener):
     def __init__(self):
         self.queues = {}
         self.topics = {}
+        self.broker_name = None
         self.connected = False
         self.response_received = False
         self.any_response_received = False
@@ -84,6 +85,8 @@ class StatisticsListener(stomp.ConnectionListener):
 
                             if key_name == 'destinationName':
                                 destination_name = value
+                            elif key_name == 'brokerName':
+                                self.broker_name = value
 
                 if destination_name:
                     if destination_name.startswith('queue://'):
@@ -155,6 +158,9 @@ def discover_destinations():
                 print(f"[SUCCESS] Found {len(listener.queues)} queues and {len(listener.topics)} topics")
                 break
 
+        if listener.broker_name:
+            print(f"[INFO] Broker name: {listener.broker_name}")
+
         return listener
 
     except Exception as e:
@@ -170,24 +176,26 @@ def update_metrics():
         listener = discover_destinations()
 
         if listener:
+            broker_name = listener.broker_name or 'unknown'
+
             # Update queue metrics
             for queue_name, stats in listener.queues.items():
                 if not queue_name.startswith('ActiveMQ.'):
                     try:
                         size = int(stats.get('size', 0))
-                        activemq_queue_size.labels(queue=queue_name).set(size)
+                        activemq_queue_size.labels(queue=queue_name, broker=broker_name).set(size)
 
                         enqueue_count = int(stats.get('enqueueCount', 0))
-                        activemq_queue_enqueue_count.labels(queue=queue_name)._value._value = enqueue_count
+                        activemq_queue_enqueue_count.labels(queue=queue_name, broker=broker_name)._value._value = enqueue_count
 
                         dequeue_count = int(stats.get('dequeueCount', 0))
-                        activemq_queue_dequeue_count.labels(queue=queue_name)._value._value = dequeue_count
+                        activemq_queue_dequeue_count.labels(queue=queue_name, broker=broker_name)._value._value = dequeue_count
 
                         consumer_count = int(stats.get('consumerCount', 0))
-                        activemq_queue_consumer_count.labels(queue=queue_name).set(consumer_count)
+                        activemq_queue_consumer_count.labels(queue=queue_name, broker=broker_name).set(consumer_count)
 
                         producer_count = int(stats.get('producerCount', 0))
-                        activemq_queue_producer_count.labels(queue=queue_name).set(producer_count)
+                        activemq_queue_producer_count.labels(queue=queue_name, broker=broker_name).set(producer_count)
                     except ValueError as e:
                         print(f"[WARN] Failed to parse metric for queue {queue_name}: {e}")
 
@@ -196,16 +204,16 @@ def update_metrics():
                 if not topic_name.startswith('ActiveMQ.'):
                     try:
                         enqueue_count = int(stats.get('enqueueCount', 0))
-                        activemq_topic_enqueue_count.labels(topic=topic_name)._value._value = enqueue_count
+                        activemq_topic_enqueue_count.labels(topic=topic_name, broker=broker_name)._value._value = enqueue_count
 
                         dequeue_count = int(stats.get('dequeueCount', 0))
-                        activemq_topic_dequeue_count.labels(topic=topic_name)._value._value = dequeue_count
+                        activemq_topic_dequeue_count.labels(topic=topic_name, broker=broker_name)._value._value = dequeue_count
 
                         consumer_count = int(stats.get('consumerCount', 0))
-                        activemq_topic_consumer_count.labels(topic=topic_name).set(consumer_count)
+                        activemq_topic_consumer_count.labels(topic=topic_name, broker=broker_name).set(consumer_count)
 
                         producer_count = int(stats.get('producerCount', 0))
-                        activemq_topic_producer_count.labels(topic=topic_name).set(producer_count)
+                        activemq_topic_producer_count.labels(topic=topic_name, broker=broker_name).set(producer_count)
                     except ValueError as e:
                         print(f"[WARN] Failed to parse metric for topic {topic_name}: {e}")
 
